@@ -1,0 +1,13 @@
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# Temp files
+unpacked/
+*.tmp
+~$*
+
+# OS
+.DS_Store
+Thumbs.db
