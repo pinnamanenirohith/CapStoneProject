@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Any, Optional
 
 class InferenceRequest(BaseModel):
@@ -6,6 +6,8 @@ class InferenceRequest(BaseModel):
     parameters: Optional[dict] = {}
 
 class InferenceResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")   # pass through model-specific fields
+
     model_name: str
     model_version: str
     prediction: Any

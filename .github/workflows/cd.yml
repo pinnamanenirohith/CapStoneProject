@@ -1,0 +1,158 @@
+name: CD Pipeline
+
+on:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+    inputs:
+      deploy_env:
+        description: "Target environment"
+        required: true
+        default: "staging"
+        type: choice
+        options: [staging, production]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/capstone
+
+jobs:
+  # ── Build & push all Docker images ──────────────────────────────────────────
+  build-and-push:
+    name: "Build & Push · ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: inference-service
+            context: backend/inference-service
+          - service: model-registry
+            context: backend/model-registry
+          - service: api-gateway
+            context: backend/api-gateway
+          - service: frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile.prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.run_number }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file:    ${{ matrix.dockerfile || format('{0}/Dockerfile', matrix.context) }}
+          push:    true
+          tags:    ${{ steps.meta.outputs.tags }}
+          labels:  ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to:   type=gha,mode=max,scope=${{ matrix.service }}
+
+  # ── Update k8s image tags and apply manifests ────────────────────────────────
+  deploy:
+    name: "Deploy to Kubernetes"
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: ${{ github.event.inputs.deploy_env || 'staging' }}
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: tag
+        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.30.0"
+
+      - name: Configure kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_B64" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Apply namespace and RBAC
+        run: kubectl apply -f k8s/namespace.yaml
+
+      - name: Apply secrets (from GitHub Secrets)
+        env:
+          JWT_SECRET:       ${{ secrets.JWT_SECRET }}
+          DB_PASSWORD:      ${{ secrets.DB_PASSWORD }}
+          GRAFANA_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
+        run: |
+          kubectl create secret generic capstone-secrets \
+            --namespace=capstone \
+            --from-literal=JWT_SECRET="$JWT_SECRET" \
+            --from-literal=DB_PASSWORD="$DB_PASSWORD" \
+            --from-literal=GRAFANA_PASSWORD="$GRAFANA_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Update image tags in manifests
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          PREFIX: ${{ env.IMAGE_PREFIX }}
+        run: |
+          for svc in inference-service model-registry api-gateway frontend; do
+            sed -i "s|image: .*${svc}.*|image: ${PREFIX}/${svc}:${TAG}|g" \
+              k8s/${svc}/deployment.yaml 2>/dev/null || true
+          done
+
+      - name: Apply all manifests
+        run: |
+          kubectl apply -f k8s/postgres/
+          kubectl apply -f k8s/model-registry/
+          kubectl apply -f k8s/inference-service/
+          kubectl apply -f k8s/api-gateway/
+          kubectl apply -f k8s/frontend/
+          kubectl apply -f k8s/monitoring/prometheus/
+          kubectl apply -f k8s/monitoring/grafana/
+          kubectl apply -f k8s/ingress.yaml
+
+      - name: Wait for rollouts
+        run: |
+          ns=capstone
+          kubectl rollout status deployment/model-registry   -n $ns --timeout=120s
+          kubectl rollout status deployment/inference-service -n $ns --timeout=120s
+          kubectl rollout status deployment/api-gateway       -n $ns --timeout=180s
+          kubectl rollout status deployment/frontend          -n $ns --timeout=60s
+
+      - name: Smoke test
+        run: |
+          GW=$(kubectl get svc api-gateway -n capstone \
+               -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          if [ -n "$GW" ]; then
+            curl -sf "http://${GW}/health" | grep '"status":"UP"'
+          else
+            echo "LoadBalancer IP not yet available; skipping smoke test"
+          fi
