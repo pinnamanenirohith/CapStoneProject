@@ -1,0 +1,119 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: capstone-postgres
+    environment:
+      POSTGRES_DB:       model_registry
+      POSTGRES_USER:     capstone
+      POSTGRES_PASSWORD: capstone123
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U capstone -d model_registry"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Model Registry (FastAPI) ────────────────────────────────────────────────
+  model-registry:
+    build: ./backend/model-registry
+    container_name: capstone-model-registry
+    ports:
+      - "8002:8002"
+    environment:
+      DATABASE_URL: postgresql://capstone:capstone123@postgres:5432/model_registry
+      SECRET_KEY:   capstone-secret-key-change-in-production
+      UPLOAD_DIR:   /app/uploads
+    volumes:
+      - model-uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Inference Service (FastAPI) ─────────────────────────────────────────────
+  inference-service:
+    build: ./backend/inference-service
+    container_name: capstone-inference
+    ports:
+      - "8001:8001"
+    environment:
+      SECRET_KEY: capstone-secret-key-change-in-production
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── API Gateway (Spring Boot) ───────────────────────────────────────────────
+  api-gateway:
+    build: ./backend/api-gateway
+    container_name: capstone-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      INFERENCE_SERVICE_URL: http://inference-service:8001
+      MODEL_REGISTRY_URL:    http://model-registry:8002
+    depends_on:
+      - model-registry
+      - inference-service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+  # ── React Frontend (Nginx) ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    container_name: capstone-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-gateway
+
+  # ── Prometheus ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.54.0
+    container_name: capstone-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+
+  # ── Grafana ─────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: capstone-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER:     admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres-data:
+  model-uploads:
+  prometheus-data:
+  grafana-data:
