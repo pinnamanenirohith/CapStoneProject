@@ -77,13 +77,17 @@ public class ProxyController {
 
     private Mono<ResponseEntity<String>> forward(WebClient client, HttpMethod method,
                                                   String path, String body, HttpHeaders inHeaders) {
-        var spec = client.method(method).uri(path)
-                .header("Content-Type", "application/json")
-                .header("Authorization", inHeaders.getFirst("Authorization") != null
-                        ? inHeaders.getFirst("Authorization") : "");
-        if (body != null) spec = spec.bodyValue(body);
+        String auth = inHeaders.getFirst("Authorization");
 
-        return spec.retrieve()
+        WebClient.RequestBodySpec bodySpec = client.method(method).uri(path)
+                .header("Content-Type", "application/json")
+                .header("Authorization", auth != null ? auth : "");
+
+        WebClient.RequestHeadersSpec<?> headersSpec = body != null
+                ? bodySpec.bodyValue(body)
+                : bodySpec;
+
+        return headersSpec.retrieve()
                 .toEntity(String.class)
                 .onErrorResume(e -> Mono.just(ResponseEntity
                         .status(HttpStatus.BAD_GATEWAY)
