@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-service
+  namespace: capstone
+  labels:
+    app: inference-service
+    version: "1.0.0"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: inference-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0    # Zero-downtime deploys
+  template:
+    metadata:
+      labels:
+        app: inference-service
+        version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8001"
+        prometheus.io/path:   "/metrics"
+    spec:
+      containers:
+        - name: inference-service
+          image: capstone/inference-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8001
+          env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: capstone-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1

@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-registry
+  namespace: capstone
+  labels:
+    app: model-registry
+    version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: model-registry
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: model-registry
+        version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8002"
+        prometheus.io/path:   "/metrics"
+    spec:
+      containers:
+        - name: model-registry
+          image: capstone/model-registry:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8002
+          env:
+            - name: DATABASE_URL
+              value: postgresql://capstone:$(DB_PASSWORD)@postgres:5432/model_registry
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: capstone-secrets
+                  key: DB_PASSWORD
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: capstone-secrets
+                  key: JWT_SECRET
+            - name: UPLOAD_DIR
+              value: /app/uploads
+          volumeMounts:
+            - name: model-uploads
+              mountPath: /app/uploads
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: model-uploads
+          persistentVolumeClaim:
+            claimName: model-uploads-pvc
