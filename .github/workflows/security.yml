@@ -1,0 +1,139 @@
+name: Security Scan
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+  schedule:
+    - cron: "0 3 * * 1"   # every Monday at 03:00 UTC
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/capstone
+
+jobs:
+  # ── Trivy image vulnerability scan ──────────────────────────────────────────
+  trivy-scan:
+    name: "Trivy · ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload SARIF to GitHub Security tab
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [inference-service, model-registry, api-gateway, frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image locally for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service == 'frontend' && 'frontend' || format('backend/{0}', matrix.service) }}
+          file:    ${{ matrix.service == 'frontend' && 'frontend/Dockerfile.prod' || format('backend/{0}/Dockerfile', matrix.service) }}
+          push:    false
+          load:    true
+          tags:    capstone/${{ matrix.service }}:scan
+          cache-from: type=gha,scope=${{ matrix.service }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref:     capstone/${{ matrix.service }}:scan
+          format:        sarif
+          output:        trivy-${{ matrix.service }}.sarif
+          severity:      CRITICAL,HIGH
+          exit-code:     "0"           # don't fail the build; upload for review
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.service }}.sarif
+          category:   trivy-${{ matrix.service }}
+
+  # ── Python dependency audit (pip-audit) ─────────────────────────────────────
+  pip-audit:
+    name: "pip-audit · ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: inference-service
+            path: backend/inference-service/requirements.txt
+          - service: model-registry
+            path: backend/model-registry/requirements.txt
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit -r ${{ matrix.path }} --format json -o pip-audit-${{ matrix.service }}.json || true
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-${{ matrix.service }}
+          path: pip-audit-${{ matrix.service }}.json
+
+  # ── Node.js dependency audit ─────────────────────────────────────────────────
+  npm-audit:
+    name: "npm audit · Frontend"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit
+        run: npm audit --audit-level=high --json > npm-audit.json || true
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-frontend
+          path: frontend/npm-audit.json
+
+  # ── Secret scanning with Gitleaks ────────────────────────────────────────────
+  gitleaks:
+    name: "Gitleaks · Secret Scan"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for secret scanning
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

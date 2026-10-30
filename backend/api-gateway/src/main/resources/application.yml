@@ -1,0 +1,23 @@
+server:
+  port: 8080
+
+app:
+  jwt:
+    secret: capstone-secret-key-change-in-production-must-be-256-bits-long!!
+    expiration-hours: 8
+  services:
+    inference-url: ${INFERENCE_SERVICE_URL:http://localhost:8001}
+    registry-url:  ${MODEL_REGISTRY_URL:http://localhost:8002}
+
+spring:
+  application:
+    name: api-gateway
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
