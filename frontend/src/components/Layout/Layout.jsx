@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import Toasts from '../common/Toasts';
 
 const titles = {
   '/dashboard':   'Dashboard',
@@ -23,6 +24,7 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+      <Toasts />
     </div>
   );
 }

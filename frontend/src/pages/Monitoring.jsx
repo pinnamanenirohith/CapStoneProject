@@ -4,34 +4,55 @@ import {
 } from 'recharts';
 import StatCard from '../components/common/StatCard';
 import { Activity, Cpu, HardDrive, Zap } from 'lucide-react';
-import { mockMetrics } from '../services/api';
-
-const data = mockMetrics.labels.map((label, i) => ({
-  time: label,
-  requests: mockMetrics.requestsPerMin[i],
-  latency:  mockMetrics.latencyMs[i],
-  cpu:      mockMetrics.cpuPercent[i],
-  memory:   mockMetrics.memoryPercent[i],
-}));
-
-const podData = [
-  { pod: 'resnet-0',  cpu: 42, mem: 68 },
-  { pod: 'resnet-1',  cpu: 44, mem: 70 },
-  { pod: 'resnet-2',  cpu: 39, mem: 66 },
-  { pod: 'bert-0',    cpu: 61, mem: 82 },
-  { pod: 'bert-1',    cpu: 58, mem: 79 },
-  { pod: 'xgboost-0', cpu: 18, mem: 32 },
-];
+import { useState } from 'react';
+import { RefreshCw, ExternalLink } from 'lucide-react';
+import { useData } from '../context/DataContext';
 
 export default function Monitoring() {
+  const { metrics, live, setLive, refresh, deployments } = useData();
+  const [range, setRange] = useState(12);
+  const data = metrics.slice(-range);
+  const avg = (k) => Math.round(data.reduce((s, p) => s + p[k], 0) / data.length);
+  const last = data[data.length - 1];
+  const p95 = Math.max(...data.map(p => p.latency));
+  const btn = 'text-sm font-medium px-3 py-2 rounded-lg border transition-colors';
+  const podData = deployments.filter(d => d.status === 'running').flatMap(d =>
+    Array.from({ length: Math.min(d.replicas, 3) }, (_, i) => ({
+      pod: `${d.model.split(' ')[0].toLowerCase()}-${i}`,
+      cpu: Math.min(95, parseInt(d.cpu) + i * 2),
+      mem: Math.min(95, 30 + parseInt(d.cpu) + i),
+    })));
+
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <select value={range} onChange={e => setRange(Number(e.target.value))}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white">
+          <option value={6}>Last 6 points</option>
+          <option value={12}>Last 12 points</option>
+        </select>
+        <button onClick={refresh} className={`${btn} flex items-center gap-1.5 bg-white border-slate-300 text-slate-700 hover:bg-slate-100`}>
+          <RefreshCw size={14} /> Refresh now
+        </button>
+        <button onClick={() => setLive(!live)}
+          className={`${btn} ${live ? 'bg-green-50 border-green-200 text-green-700' : 'bg-white border-slate-300 text-slate-600'}`}>
+          Live updates: {live ? 'ON' : 'OFF'}
+        </button>
+        <a href="http://localhost:3000" target="_blank" rel="noreferrer"
+          className={`${btn} ml-auto flex items-center gap-1.5 bg-white border-slate-300 text-slate-700 hover:bg-slate-100`}>
+          <ExternalLink size={14} /> Open Grafana
+        </a>
+        <a href="http://localhost:9090" target="_blank" rel="noreferrer"
+          className={`${btn} flex items-center gap-1.5 bg-white border-slate-300 text-slate-700 hover:bg-slate-100`}>
+          <ExternalLink size={14} /> Open Prometheus
+        </a>
+      </div>
       {/* Stats */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard label="Avg CPU"     value="40%"   sub="across all pods"   icon={Cpu}       color="blue" />
-        <StatCard label="Avg Memory"  value="65%"   sub="3.2 GB / 8 GB"    icon={HardDrive} color="purple" />
-        <StatCard label="Req/min"     value="162"   sub="current"           icon={Zap}       color="green" />
-        <StatCard label="P95 Latency" value="82 ms" sub="inference latency" icon={Activity}  color="orange" />
+        <StatCard label="Avg CPU"     value={`${avg('cpu')}%`} sub="across all pods"   icon={Cpu}       color="blue" />
+        <StatCard label="Avg Memory"  value={`${avg('memory')}%`} sub="of node memory"    icon={HardDrive} color="purple" />
+        <StatCard label="Req/min"     value={last.requests} sub="current"           icon={Zap}       color="green" />
+        <StatCard label="P95 Latency" value={`${p95} ms`} sub="inference latency" icon={Activity}  color="orange" />
       </div>
 
       {/* Charts row 1 */}
@@ -47,7 +68,7 @@ export default function Monitoring() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <XAxis dataKey="time" interval="preserveStartEnd" tick={{ fontSize: 11, fill: '#94a3b8' }} />
               <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} />
               <Tooltip />
               <Area type="monotone" dataKey="requests" stroke="#3b82f6" fill="url(#reqGrad)" strokeWidth={2} />
@@ -60,7 +81,7 @@ export default function Monitoring() {
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <XAxis dataKey="time" interval="preserveStartEnd" tick={{ fontSize: 11, fill: '#94a3b8' }} />
               <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} />
               <Tooltip />
               <Line type="monotone" dataKey="latency" stroke="#8b5cf6" strokeWidth={2} dot={false} />
@@ -76,7 +97,7 @@ export default function Monitoring() {
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+              <XAxis dataKey="time" interval="preserveStartEnd" tick={{ fontSize: 11, fill: '#94a3b8' }} />
               <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#94a3b8' }} />
               <Tooltip />
               <Legend />

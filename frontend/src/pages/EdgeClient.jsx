@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Cpu, Wifi, Thermometer, Send, RefreshCw } from 'lucide-react';
+import { Cpu, Wifi, Thermometer, Send, RefreshCw, Power, Activity, DownloadCloud } from 'lucide-react';
+import { useData } from '../context/DataContext';
 import StatCard from '../components/common/StatCard';
 import Badge from '../components/common/Badge';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -22,15 +23,37 @@ export default function EdgeClient() {
   const [testPayload, setTestPayload] = useState('{"text": "Testing edge inference from Raspberry Pi 4"}');
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
+  const { toast, addLog, addActivity } = useData();
+  const [online, setOnline] = useState(true);
+  const [uptime, setUptime] = useState('6d 14h');
+  const [busy, setBusy] = useState('');
+
+  const restart = () => {
+    setBusy('restart'); setOnline(false);
+    toast('Rebooting Raspberry Pi...', 'info');
+    setTimeout(() => { setOnline(true); setUptime('0m'); setBusy(''); toast('Edge client is back online'); }, 2000);
+  };
+  const ping = () => {
+    if (!online) { toast('Device is offline', 'error'); return; }
+    toast(`Pong from 192.168.1.55 - ${8 + Math.floor(Math.random() * 20)} ms`);
+  };
+  const sync = () => {
+    if (!online) { toast('Device is offline', 'error'); return; }
+    setBusy('sync');
+    setTimeout(() => { setBusy(''); toast('Synced 3 models to edge cache'); addActivity('Edge Sync', 'Raspberry Pi 4', 'deployed'); }, 1200);
+  };
 
   const runTest = async (e) => {
     e.preventDefault();
+    if (!online) { toast('Device is offline - cannot send', 'error'); return; }
+    try { JSON.parse(testPayload); } catch { toast('Invalid JSON payload', 'error'); return; }
     setTesting(true);
     await new Promise(r => setTimeout(r, 800));
     setTestResult({
       status: 'success',
       response: { sentiment: 'POSITIVE', score: 0.988, latency_ms: 342, source: 'edge-client-rpi4' },
     });
+    addLog('POST', '/api/v1/inference/bert', 200, '342ms', '192.168.1.55');
     setTesting(false);
   };
 
@@ -48,8 +71,11 @@ export default function EdgeClient() {
           </div>
         </div>
         <div className="flex items-center gap-2 ml-auto">
-          <Badge status="online" />
-          <span className="text-xs text-slate-400">IP: 192.168.1.55</span>
+          <Badge status={online ? 'online' : 'offline'} />
+          <span className="text-xs text-slate-400 mr-2">IP: 192.168.1.55</span>
+          <button onClick={ping} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-700 hover:bg-slate-100"><Activity size={13} /> Ping</button>
+          <button onClick={sync} disabled={busy === 'sync'} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-60"><DownloadCloud size={13} /> {busy === 'sync' ? 'Syncing...' : 'Sync models'}</button>
+          <button onClick={restart} disabled={busy === 'restart'} className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 rounded-lg text-xs text-red-600 hover:bg-red-50 disabled:opacity-60"><Power size={13} /> Reboot</button>
         </div>
       </div>
 
@@ -58,7 +84,7 @@ export default function EdgeClient() {
         <StatCard label="CPU Temp"     value="50°C"   sub="safe range < 80°C"      icon={Thermometer} color="orange" />
         <StatCard label="CPU Load"     value="34%"    sub="4 cores active"          icon={Cpu}         color="blue" />
         <StatCard label="Network"      value="22 Mbps" sub="WiFi · RSSI -52 dBm"   icon={Wifi}        color="green" />
-        <StatCard label="Uptime"       value="6d 14h"  sub="since last reboot"      icon={RefreshCw}   color="purple" />
+        <StatCard label="Uptime"       value={uptime}  sub="since last reboot"      icon={RefreshCw}   color="purple" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
